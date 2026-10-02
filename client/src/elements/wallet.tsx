@@ -103,7 +103,7 @@ export function WalletButton() {
                     </Button>
                 </WithTooltip>
             ) : (
-                <WithTooltip label={`Connected as ${address}`}>
+                <WithTooltip label="Your connected wallet">
                     <span className="hidden sm:flex items-center gap-2 rounded-full border bg-card py-1 pl-1 pr-3 text-sm font-medium">
                         <AddressAvatar address={address} className="h-7 w-7" />
                         {shortAddress(address)}
