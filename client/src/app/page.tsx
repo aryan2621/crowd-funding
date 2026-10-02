@@ -31,9 +31,15 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog";
-import { Trash2, Target, User, Loader2 } from "lucide-react";
+import { Lock, Target, User, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { Campaign } from "@/models/campaign";
+import {
+    Campaign,
+    CampaignForm,
+    STATUS_LABELS,
+    getCampaignStatus,
+    getProgress,
+} from "@/models/campaign";
 import { Calendar } from "@/components/ui/calendar";
 import CustomConnectWallet from "@/elements/button";
 import { Slider } from "@/components/ui/slider";
@@ -43,18 +49,19 @@ import BasicLayout from "@/layouts/BasicLayout";
 interface CampaignCardProps {
     index: number;
     campaign: Campaign;
-    onDelete: () => void;
-    isDeleting: boolean;
+    onClose: () => void;
+    isClosing: boolean;
 }
 
 const CampaignCard = ({
     campaign,
-    onDelete,
+    onClose,
     index,
-    isDeleting,
+    isClosing,
 }: CampaignCardProps) => {
     const address = useAddress();
-    const progress = (campaign.amountCollected / campaign.target) * 100;
+    const progress = getProgress(campaign);
+    const status = getCampaignStatus(campaign);
     return (
         <Card className="w-[350px]">
             <CardHeader className="relative">
@@ -63,17 +70,22 @@ const CampaignCard = ({
                     <Badge variant="secondary" className="ml-2">
                         #{index + 1}
                     </Badge>
+                    <Badge variant="outline" className="ml-2">
+                        {STATUS_LABELS[status]}
+                    </Badge>
                 </CardTitle>
                 <CardDescription>{campaign.description}</CardDescription>
-                {address === campaign.owner && (
+                {address === campaign.owner && !campaign.isClosed && (
                     <Button
                         variant="ghost"
                         size="icon"
                         className="absolute top-2 right-2"
-                        onClick={onDelete}
-                        disabled={isDeleting}
+                        onClick={onClose}
+                        disabled={isClosing}
+                        title="Close campaign"
+                        aria-label="Close campaign"
                     >
-                        <Trash2 className="h-4 w-4" />
+                        <Lock className="h-4 w-4" />
                     </Button>
                 )}
             </CardHeader>
@@ -109,7 +121,7 @@ const CampaignCard = ({
                         {campaign.owner.slice(-4)}
                     </span>
                 </div>
-                <Link href={`/campaign/${index}`}>
+                <Link href={`/campaign?id=${index}`}>
                     <Button variant="outline">View Details</Button>
                 </Link>
             </CardFooter>
@@ -118,7 +130,7 @@ const CampaignCard = ({
 };
 
 interface CreateCampaignDialogProps {
-    onCreateCampaign: (campaignData: Campaign) => Promise<void>;
+    onCreateCampaign: (campaignData: CampaignForm) => Promise<void>;
     isCreating: boolean;
 }
 
@@ -127,9 +139,13 @@ const CreateCampaignDialog = ({
     isCreating,
 }: CreateCampaignDialogProps) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [campaignData, setCampaignData] = useState<Campaign>(
-        new Campaign("", "", "", 0, new Date(), 0, "", [], []),
-    );
+    const [campaignData, setCampaignData] = useState<CampaignForm>({
+        title: "",
+        description: "",
+        target: 0,
+        deadline: new Date(),
+        image: "",
+    });
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         await onCreateCampaign(campaignData);
@@ -201,7 +217,7 @@ const CreateCampaignDialog = ({
                                         name="target"
                                         min={0}
                                         max={10}
-                                        step={1}
+                                        step={0.1}
                                         className="flex-grow mr-2"
                                         value={[campaignData.target]}
                                         onValueChange={(value) => {
@@ -227,6 +243,7 @@ const CreateCampaignDialog = ({
                                     <Calendar
                                         mode="single"
                                         selected={campaignData.deadline}
+                                        disabled={{ before: new Date() }}
                                         onSelect={(date) => {
                                             setCampaignData({
                                                 ...campaignData,
@@ -290,10 +307,10 @@ export default function Component() {
     );
     const { mutateAsync: createCampaign, isLoading: isCreating } =
         useContractWrite(contract, "createCampaign");
-    const { mutateAsync: deleteCampaign, isLoading: isDeleting } =
-        useContractWrite(contract, "deleteCampaign");
+    const { mutateAsync: closeCampaign, isLoading: isClosing } =
+        useContractWrite(contract, "closeCampaign");
 
-    const handleCreateCampaign = async (campaignData: Campaign) => {
+    const handleCreateCampaign = async (campaignData: CampaignForm) => {
         if (!contract || !address) return;
         if (
             !campaignData.title ||
@@ -308,11 +325,14 @@ export default function Component() {
             });
             return;
         }
-        const timestamp = Math.floor(campaignData.deadline.getTime() / 1000);
+        // End of the selected day, so picking today still gives a future deadline.
+        const deadline = new Date(campaignData.deadline);
+        deadline.setHours(23, 59, 59, 0);
+        const timestamp = Math.floor(deadline.getTime() / 1000);
         const args = [
             campaignData.title,
             campaignData.description,
-            campaignData.target,
+            ethers.utils.parseEther(campaignData.target.toFixed(2)),
             timestamp,
             campaignData.image,
         ];
@@ -334,19 +354,20 @@ export default function Component() {
         }
     };
 
-    const handleDeleteCampaign = async (campaignId: number) => {
+    const handleCloseCampaign = async (campaignId: number) => {
         if (!contract || !address) return;
 
         try {
-            await deleteCampaign({ args: [campaignId] });
+            await closeCampaign({ args: [campaignId] });
             toast({
-                title: "Campaign deleted successfully!",
-                description: "Your campaign has been deleted.",
+                title: "Campaign closed successfully!",
+                description:
+                    "If the target was reached, the funds were sent to your wallet.",
             });
         } catch (error) {
-            console.error("Error deleting campaign:", error);
+            console.error("Error closing campaign:", error);
             toast({
-                title: "Error deleting campaign",
+                title: "Error closing campaign",
                 description: "Please try again.",
             });
         }
@@ -375,8 +396,8 @@ export default function Component() {
                                 key={index}
                                 index={index}
                                 campaign={campaign}
-                                onDelete={() => handleDeleteCampaign(index)}
-                                isDeleting={isDeleting}
+                                onClose={() => handleCloseCampaign(index)}
+                                isClosing={isClosing}
                             />
                         ))}
                     </div>

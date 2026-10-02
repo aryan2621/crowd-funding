@@ -16,6 +16,7 @@ contract CrowdFunding {
     }
 
     mapping(uint256 => Campaign) public campaigns;
+    mapping(uint256 => mapping(address => uint256)) public contributions;
     uint256 public numberOfCampaigns = 0;
 
     event CampaignCreated(
@@ -30,6 +31,11 @@ contract CrowdFunding {
         uint256 amount
     );
     event CampaignClosed(uint256 indexed campaignId, bool success);
+    event RefundClaimed(
+        uint256 indexed campaignId,
+        address indexed donor,
+        uint256 amount
+    );
 
     modifier onlyCampaignOwner(uint256 _id) {
         require(
@@ -95,25 +101,57 @@ contract CrowdFunding {
         uint256 donationAmount = msg.value;
         if (msg.value > remainingAmount) {
             donationAmount = remainingAmount;
-            payable(msg.sender).transfer(msg.value - remainingAmount);
         }
 
         campaign.donators.push(msg.sender);
         campaign.donations.push(donationAmount);
         campaign.amountCollected += donationAmount;
+        contributions[_id][msg.sender] += donationAmount;
         emit DonationReceived(_id, msg.sender, donationAmount);
+
+        if (msg.value > donationAmount) {
+            _send(msg.sender, msg.value - donationAmount);
+        }
     }
 
+    // Owner can close at any time, including after the deadline, so funds
+    // are never locked. Payout only happens if the target was reached.
     function closeCampaign(
         uint256 _id
-    ) public campaignExists(_id) campaignActive(_id) onlyCampaignOwner(_id) {
+    ) public campaignExists(_id) onlyCampaignOwner(_id) {
         Campaign storage campaign = campaigns[_id];
+        require(!campaign.isClosed, "Campaign is closed");
         campaign.isClosed = true;
         bool success = campaign.amountCollected >= campaign.target;
-        if (success) {
-            payable(campaign.owner).transfer(campaign.amountCollected);
-        }
         emit CampaignClosed(_id, success);
+        if (success) {
+            _send(campaign.owner, campaign.amountCollected);
+        }
+    }
+
+    // Donors get their money back once a campaign has failed: closed or
+    // expired without reaching its target.
+    function claimRefund(uint256 _id) public campaignExists(_id) {
+        Campaign storage campaign = campaigns[_id];
+        require(
+            campaign.amountCollected < campaign.target,
+            "Campaign reached its target"
+        );
+        require(
+            campaign.isClosed || block.timestamp > campaign.deadline,
+            "Campaign is still active"
+        );
+        uint256 amount = contributions[_id][msg.sender];
+        require(amount > 0, "Nothing to refund");
+
+        contributions[_id][msg.sender] = 0;
+        emit RefundClaimed(_id, msg.sender, amount);
+        _send(msg.sender, amount);
+    }
+
+    function _send(address _to, uint256 _amount) private {
+        (bool sent, ) = payable(_to).call{value: _amount}("");
+        require(sent, "Transfer failed");
     }
 
     function getDonators(
