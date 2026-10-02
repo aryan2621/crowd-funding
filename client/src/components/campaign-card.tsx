@@ -43,6 +43,7 @@ export function StatusPill({
 }
 
 // User-supplied image URLs often break; fall back to a soft placeholder.
+// Track which src failed so a new URL (e.g. while typing) is retried.
 export function CampaignImage({
     src,
     alt,
@@ -52,8 +53,8 @@ export function CampaignImage({
     alt: string;
     className?: string;
 }) {
-    const [failed, setFailed] = useState(false);
-    if (!src || failed) {
+    const [failedSrc, setFailedSrc] = useState<string | null>(null);
+    if (!src || failedSrc === src) {
         return (
             <div
                 className={cn(
@@ -70,7 +71,7 @@ export function CampaignImage({
         <img
             src={src}
             alt={alt}
-            onError={() => setFailed(true)}
+            onError={() => setFailedSrc(src)}
             className={cn("object-cover", className)}
         />
     );
