@@ -1,5 +1,5 @@
 "use client";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
     useContract,
     useContractRead,
@@ -18,6 +18,7 @@ import {
 import { CreateCampaignDialog } from "@/components/create-campaign-dialog";
 import { WithTooltip } from "@/elements/with-tooltip";
 import { useWallet } from "@/elements/wallet";
+import { settle } from "@/lib/format";
 import { Campaign, CampaignForm, getCampaignStatus } from "@/models/campaign";
 
 const FILTERS = [
@@ -50,10 +51,15 @@ export default function Home() {
     const { address, connectWallet, ensureNetwork } = useWallet();
     const { contract } = useContract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
     const { data, isLoading } = useContractRead(contract, "getCampaigns");
-    const { mutateAsync: createCampaign, isLoading: isCreating } =
-        useContractWrite(contract, "createCampaign");
+    const { mutateAsync: createCampaign } = useContractWrite(
+        contract,
+        "createCampaign",
+    );
 
     const [isCreateOpen, setIsCreateOpen] = useState(false);
+    const [isCreating, setIsCreating] = useState(false);
+    const dataRef = useRef<Campaign[]>([]);
+    dataRef.current = (data as Campaign[] | undefined) ?? [];
     const [filter, setFilter] = useState<Filter>("all");
 
     // Keep each campaign's on-chain id, newest first.
@@ -75,17 +81,30 @@ export default function Home() {
 
     const handleCreate = async (form: CampaignForm) => {
         const deadline = new Date(`${form.deadline}T23:59:59`);
+        const title = form.title.trim();
+        const countBefore = dataRef.current.length;
+        setIsCreating(true);
         try {
             await ensureNetwork();
-            await createCampaign({
-                args: [
-                    form.title.trim(),
-                    form.description.trim(),
-                    ethers.utils.parseEther(form.target),
-                    Math.floor(deadline.getTime() / 1000),
-                    form.image.trim(),
-                ],
-            });
+            await settle(
+                createCampaign({
+                    args: [
+                        title,
+                        form.description.trim(),
+                        ethers.utils.parseEther(form.target),
+                        Math.floor(deadline.getTime() / 1000),
+                        form.image.trim(),
+                    ],
+                }),
+                () =>
+                    dataRef.current
+                        .slice(countBefore)
+                        .some(
+                            (c) =>
+                                c.title === title &&
+                                c.owner.toLowerCase() === address?.toLowerCase(),
+                        ),
+            );
             toast({
                 title: "Campaign launched",
                 description: "It's live and ready for backers.",
@@ -98,6 +117,8 @@ export default function Home() {
                 description: "The transaction was rejected or failed.",
             });
             return false;
+        } finally {
+            setIsCreating(false);
         }
     };
 

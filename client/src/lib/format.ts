@@ -21,3 +21,21 @@ export function timeLeft(deadline: BigNumber): string {
     const days = Math.ceil(hours / 24);
     return days === 1 ? "1 day left" : `${days} days left`;
 }
+
+// Wallet providers (notably MetaMask in Brave) can be slow to report a
+// receipt even after the transaction is mined. Resolve as soon as either
+// the write resolves or the expected on-chain change shows up in our reads.
+export async function settle(
+    action: Promise<unknown>,
+    isDone: () => boolean,
+): Promise<void> {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const seen = new Promise<void>((resolve) => {
+        timer = setInterval(() => isDone() && resolve(), 1000);
+    });
+    try {
+        await Promise.race([action, seen]);
+    } finally {
+        clearInterval(timer);
+    }
+}

@@ -1,5 +1,5 @@
 "use client";
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -31,7 +31,13 @@ import { SiteFooter, SiteHeader } from "@/components/site-header";
 import { CampaignImage, StatusPill } from "@/components/campaign-card";
 import { IconButton, WithTooltip } from "@/elements/with-tooltip";
 import { AddressAvatar, useWallet } from "@/elements/wallet";
-import { EXPLORER_URL, formatEth, shortAddress, timeLeft } from "@/lib/format";
+import {
+    EXPLORER_URL,
+    formatEth,
+    settle,
+    shortAddress,
+    timeLeft,
+} from "@/lib/format";
 import { Campaign, getCampaignStatus, getProgress } from "@/models/campaign";
 
 // Campaign IDs only exist on-chain, so the page reads ?id= at runtime
@@ -72,15 +78,31 @@ function CampaignDetails() {
         key,
         address ?? ethers.constants.AddressZero,
     ]);
-    const { mutateAsync: donateToCampaign, isLoading: isDonating } =
-        useContractWrite(contract, "donateToCampaign");
-    const { mutateAsync: claimRefund, isLoading: isRefunding } =
-        useContractWrite(contract, "claimRefund");
-    const { mutateAsync: closeCampaign, isLoading: isClosing } =
-        useContractWrite(contract, "closeCampaign");
+    const { mutateAsync: donateToCampaign } = useContractWrite(
+        contract,
+        "donateToCampaign",
+    );
+    const { mutateAsync: claimRefund } = useContractWrite(
+        contract,
+        "claimRefund",
+    );
+    const { mutateAsync: closeCampaign } = useContractWrite(
+        contract,
+        "closeCampaign",
+    );
 
     const [amount, setAmount] = useState("");
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+    const [pending, setPending] = useState<
+        "donate" | "refund" | "close" | null
+    >(null);
+    const isDonating = pending === "donate";
+    const isRefunding = pending === "refund";
+    const isClosing = pending === "close";
+
+    // Latest reads, so settle() can see on-chain changes mid-transaction.
+    const latest = useRef({ campaign, contribution });
+    latest.current = { campaign, contribution };
 
     if (isLoading || (!campaign && !contract)) return <Spinner />;
     if (!campaign)
@@ -104,16 +126,20 @@ function CampaignDetails() {
     const remaining = campaign.target.sub(campaign.amountCollected);
     const backers = new Set(campaign.donators.map((d) => d.toLowerCase())).size;
 
-    // Wraps a contract write with wallet/network checks and toasts.
+    // Wraps a contract write with wallet/network checks and toasts. isDone
+    // detects the on-chain effect in case the wallet's receipt is slow.
     const run = async (
+        kind: "donate" | "refund" | "close",
         action: () => Promise<unknown>,
+        isDone: () => boolean,
         success: string,
         failure: string,
     ) => {
         if (!address && !(await connectWallet())) return false;
+        setPending(kind);
         try {
             await ensureNetwork();
-            await action();
+            await settle(action(), isDone);
             toast({ title: success });
             return true;
         } catch (error) {
@@ -123,17 +149,22 @@ function CampaignDetails() {
                 description: "The transaction was rejected or failed.",
             });
             return false;
+        } finally {
+            setPending(null);
         }
     };
 
     const handleDonate = async (e: React.FormEvent) => {
         e.preventDefault();
+        const raisedBefore = campaign.amountCollected;
         const done = await run(
+            "donate",
             () =>
                 donateToCampaign({
                     args: [key],
                     overrides: { value: ethers.utils.parseEther(amount) },
                 }),
+            () => !!latest.current.campaign?.amountCollected.gt(raisedBefore),
             "Thanks for backing this campaign!",
             "Couldn't send donation",
         );
@@ -142,7 +173,9 @@ function CampaignDetails() {
 
     const handleClose = async () => {
         const done = await run(
+            "close",
             () => closeCampaign({ args: [key] }),
+            () => !!latest.current.campaign?.isClosed,
             status === "funded"
                 ? "Funds sent to your wallet"
                 : "Campaign ended. Backers can now claim refunds.",
@@ -153,7 +186,9 @@ function CampaignDetails() {
 
     const handleRefund = () =>
         run(
+            "refund",
             () => claimRefund({ args: [key] }),
+            () => BigNumber.from(latest.current.contribution ?? 0).isZero(),
             "Refund sent to your wallet",
             "Couldn't claim refund",
         );
