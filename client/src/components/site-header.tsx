@@ -2,13 +2,13 @@
 
 import React from "react";
 import Link from "next/link";
-import { Plus, Sprout } from "lucide-react";
-import { IconButton, WithTooltip } from "@/elements/with-tooltip";
+import { Sprout } from "lucide-react";
+import { WithTooltip } from "@/elements/with-tooltip";
 import { ThemeToggle } from "@/elements/theme-toggle";
 import { WalletButton } from "@/elements/wallet";
 import { EXPLORER_URL } from "@/lib/format";
 
-export function SiteHeader({ onCreate }: { onCreate?: () => void }) {
+export function SiteHeader() {
     return (
         <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur">
             <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4">
@@ -24,11 +24,6 @@ export function SiteHeader({ onCreate }: { onCreate?: () => void }) {
                     </Link>
                 </WithTooltip>
                 <div className="flex items-center gap-1">
-                    {onCreate && (
-                        <IconButton label="Start a campaign" onClick={onCreate}>
-                            <Plus />
-                        </IconButton>
-                    )}
                     <ThemeToggle />
                     <div className="ml-2">
                         <WalletButton />

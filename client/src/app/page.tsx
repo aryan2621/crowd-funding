@@ -6,15 +6,11 @@ import {
     useContractWrite,
 } from "@thirdweb-dev/react";
 import { ethers } from "ethers";
-import { HandCoins, Rocket, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { SiteFooter, SiteHeader } from "@/components/site-header";
-import {
-    CampaignCard,
-    CampaignCardSkeleton,
-} from "@/components/campaign-card";
+import { CampaignCard, CampaignCardSkeleton } from "@/components/campaign-card";
 import { CreateCampaignDialog } from "@/components/create-campaign-dialog";
 import { WithTooltip } from "@/elements/with-tooltip";
 import { useWallet } from "@/elements/wallet";
@@ -24,27 +20,13 @@ import { Campaign, CampaignForm, getCampaignStatus } from "@/models/campaign";
 const FILTERS = [
     { key: "all", label: "All", hint: "Show every campaign" },
     { key: "active", label: "Active", hint: "Campaigns still accepting funds" },
-    { key: "ended", label: "Ended", hint: "Funded, failed or closed campaigns" },
+    {
+        key: "ended",
+        label: "Ended",
+        hint: "Funded, failed or closed campaigns",
+    },
 ] as const;
 type Filter = (typeof FILTERS)[number]["key"];
-
-const STEPS = [
-    {
-        icon: Rocket,
-        title: "Launch",
-        body: "Set a goal and a deadline. Your campaign lives on-chain in seconds.",
-    },
-    {
-        icon: HandCoins,
-        title: "Get backed",
-        body: "Anyone with a wallet can chip in ETH, and every donation is public.",
-    },
-    {
-        icon: ShieldCheck,
-        title: "Withdraw or refund",
-        body: "Hit the goal and the funds are yours. Miss it and backers get refunded.",
-    },
-];
 
 export default function Home() {
     const { toast } = useToast();
@@ -62,17 +44,26 @@ export default function Home() {
     dataRef.current = (data as Campaign[] | undefined) ?? [];
     const [filter, setFilter] = useState<Filter>("all");
 
+    // Filters only help when there's a mix of active and ended campaigns.
+    const showFilters = useMemo(() => {
+        const all = (data as Campaign[] | undefined) ?? [];
+        const active = all.filter(
+            (c) => getCampaignStatus(c) === "active",
+        ).length;
+        return active > 0 && active < all.length;
+    }, [data]);
+
     // Keep each campaign's on-chain id, newest first.
     const campaigns = useMemo(() => {
         const list = ((data as Campaign[] | undefined) ?? []).map(
             (campaign, id) => ({ campaign, id }),
         );
         return list.reverse().filter(({ campaign }) => {
-            if (filter === "all") return true;
+            if (filter === "all" || !showFilters) return true;
             const isActive = getCampaignStatus(campaign) === "active";
             return filter === "active" ? isActive : !isActive;
         });
-    }, [data, filter]);
+    }, [data, filter, showFilters]);
 
     const openCreate = async () => {
         if (!address && !(await connectWallet())) return;
@@ -102,7 +93,8 @@ export default function Home() {
                         .some(
                             (c) =>
                                 c.title === title &&
-                                c.owner.toLowerCase() === address?.toLowerCase(),
+                                c.owner.toLowerCase() ===
+                                    address?.toLowerCase(),
                         ),
             );
             toast({
@@ -124,23 +116,18 @@ export default function Home() {
 
     return (
         <div className="flex min-h-screen flex-col">
-            <SiteHeader onCreate={openCreate} />
+            <SiteHeader />
             <main className="flex-1">
-                <section className="mx-auto max-w-3xl px-4 pb-16 pt-20 text-center md:pt-28">
-                    <span className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
-                        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-                        Live on the Sepolia testnet
-                    </span>
-                    <h1 className="mt-6 text-balance text-4xl font-semibold tracking-tight md:text-6xl">
+                <section className="mx-auto max-w-3xl px-4 pb-14 pt-16 text-center md:pt-24">
+                    <h1 className="text-balance text-4xl font-semibold tracking-tight md:text-6xl">
                         Back ideas you believe in.{" "}
                         <span className="text-primary">
                             Straight from your wallet.
                         </span>
                     </h1>
                     <p className="mx-auto mt-5 max-w-xl text-balance text-lg text-muted-foreground">
-                        Launch a campaign in a minute. Creators get paid only
-                        when the goal is met. Otherwise, everyone gets their
-                        ETH back.
+                        Creators get paid only if the goal is met. Otherwise,
+                        everyone gets their ETH back.
                     </p>
                     <div className="mt-8">
                         <WithTooltip label="Create a new fundraising campaign">
@@ -155,28 +142,33 @@ export default function Home() {
                     </div>
                 </section>
 
-                <section id="campaigns" className="mx-auto max-w-6xl px-4 pb-20">
+                <section
+                    id="campaigns"
+                    className="mx-auto max-w-6xl px-4 pb-20"
+                >
                     <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
                         <h2 className="text-2xl font-semibold tracking-tight">
                             Campaigns
                         </h2>
-                        <div className="flex rounded-full border bg-card p-1">
-                            {FILTERS.map((f) => (
-                                <WithTooltip key={f.key} label={f.hint}>
-                                    <button
-                                        onClick={() => setFilter(f.key)}
-                                        className={cn(
-                                            "rounded-full px-4 py-1.5 text-sm font-medium transition",
-                                            filter === f.key
-                                                ? "bg-foreground text-background"
-                                                : "text-muted-foreground hover:text-foreground",
-                                        )}
-                                    >
-                                        {f.label}
-                                    </button>
-                                </WithTooltip>
-                            ))}
-                        </div>
+                        {showFilters && (
+                            <div className="flex rounded-full border bg-card p-1">
+                                {FILTERS.map((f) => (
+                                    <WithTooltip key={f.key} label={f.hint}>
+                                        <button
+                                            onClick={() => setFilter(f.key)}
+                                            className={cn(
+                                                "rounded-full px-4 py-1.5 text-sm font-medium transition",
+                                                filter === f.key
+                                                    ? "bg-foreground text-background"
+                                                    : "text-muted-foreground hover:text-foreground",
+                                            )}
+                                        >
+                                            {f.label}
+                                        </button>
+                                    </WithTooltip>
+                                ))}
+                            </div>
+                        )}
                     </div>
                     {isLoading ? (
                         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -206,24 +198,6 @@ export default function Home() {
                             </p>
                         </div>
                     )}
-                </section>
-
-                <section className="border-t bg-card/50">
-                    <div className="mx-auto grid max-w-6xl gap-10 px-4 py-20 md:grid-cols-3">
-                        {STEPS.map(({ icon: Icon, title, body }, i) => (
-                            <div key={title}>
-                                <span className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
-                                    <Icon className="h-5 w-5" />
-                                </span>
-                                <h3 className="mt-4 font-semibold">
-                                    {i + 1}. {title}
-                                </h3>
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                    {body}
-                                </p>
-                            </div>
-                        ))}
-                    </div>
                 </section>
             </main>
             <SiteFooter />
