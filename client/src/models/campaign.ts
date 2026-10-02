@@ -14,12 +14,12 @@ export interface Campaign {
     isClosed: boolean;
 }
 
-// Create-campaign form state; target is in ETH.
+// Create-campaign form state; target is in ETH, deadline is "yyyy-mm-dd".
 export interface CampaignForm {
     title: string;
     description: string;
-    target: number;
-    deadline: Date;
+    target: string;
+    deadline: string;
     image: string;
 }
 

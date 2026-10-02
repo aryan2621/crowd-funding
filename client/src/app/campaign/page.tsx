@@ -1,77 +1,67 @@
 "use client";
 import React, { Suspense, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-    useAddress,
     useContract,
     useContractRead,
     useContractWrite,
 } from "@thirdweb-dev/react";
 import { BigNumber, ethers } from "ethers";
 import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardFooter,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Label } from "@/components/ui/label";
-import CustomConnectWallet from "@/elements/button";
-import { Slider } from "@/components/ui/slider";
-import { Badge } from "@/components/ui/badge";
-import {
+    ArrowLeft,
+    ExternalLink,
+    Link2,
     Loader2,
-    Calendar,
-    Target,
-    User,
-    DollarSign,
-    Users,
-    Undo2,
+    Lock,
 } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import BasicLayout from "@/layouts/BasicLayout";
-import {
-    Sheet,
-    SheetClose,
-    SheetContent,
-    SheetDescription,
-    SheetFooter,
-    SheetHeader,
-    SheetTitle,
-    SheetTrigger,
-} from "@/components/ui/sheet";
-import {
-    Campaign,
-    STATUS_LABELS,
-    getCampaignStatus,
-    getProgress,
-} from "@/models/campaign";
+import { SiteFooter, SiteHeader } from "@/components/site-header";
+import { CampaignImage, StatusPill } from "@/components/campaign-card";
+import { IconButton, WithTooltip } from "@/elements/with-tooltip";
+import { AddressAvatar, useWallet } from "@/elements/wallet";
+import { EXPLORER_URL, formatEth, shortAddress, timeLeft } from "@/lib/format";
+import { Campaign, getCampaignStatus, getProgress } from "@/models/campaign";
 
 // Campaign IDs only exist on-chain, so the page reads ?id= at runtime
 // instead of using a dynamic route (which static export can't pre-render).
 export default function Page() {
     return (
-        <Suspense
-            fallback={
-                <div className="flex justify-center items-center h-screen">
-                    <Loader2 className="h-8 w-8 animate-spin" />
-                </div>
-            }
-        >
-            <CampaignDetails />
-        </Suspense>
+        <div className="flex min-h-screen flex-col">
+            <SiteHeader />
+            <main className="flex-1">
+                <Suspense fallback={<Spinner />}>
+                    <CampaignDetails />
+                </Suspense>
+            </main>
+            <SiteFooter />
+        </div>
+    );
+}
+
+function Spinner() {
+    return (
+        <div className="flex h-[60vh] items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
     );
 }
 
 function CampaignDetails() {
     const { toast } = useToast();
     const key = useSearchParams().get("id") ?? "";
-    const address = useAddress();
+    const { address, connectWallet, ensureNetwork } = useWallet();
     const { contract } = useContract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
     const { data: campaign, isLoading } = useContractRead(
         contract,
@@ -86,275 +76,327 @@ function CampaignDetails() {
         useContractWrite(contract, "donateToCampaign");
     const { mutateAsync: claimRefund, isLoading: isRefunding } =
         useContractWrite(contract, "claimRefund");
+    const { mutateAsync: closeCampaign, isLoading: isClosing } =
+        useContractWrite(contract, "closeCampaign");
 
-    const [donationAmount, setDonationAmount] = useState(0);
+    const [amount, setAmount] = useState("");
+    const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
-    if (isLoading)
-        return (
-            <div className="flex justify-center items-center h-screen">
-                <Loader2 className="h-8 w-8 animate-spin" />
-            </div>
-        );
+    if (isLoading || (!campaign && !contract)) return <Spinner />;
     if (!campaign)
         return (
-            <Alert variant="destructive">
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>Campaign not found</AlertDescription>
-            </Alert>
+            <div className="mx-auto max-w-md px-4 py-24 text-center">
+                <h1 className="text-xl font-semibold">Campaign not found</h1>
+                <p className="mt-2 text-muted-foreground">
+                    It may not exist on this contract.
+                </p>
+                <Button asChild variant="outline" className="mt-6">
+                    <Link href="/">Back to campaigns</Link>
+                </Button>
+            </div>
         );
-    const { donators, donations } = campaign;
-    const progress = getProgress(campaign);
-    const status = getCampaignStatus(campaign);
-    const remaining = Number(
-        ethers.utils.formatEther(
-            campaign.target.sub(campaign.amountCollected),
-        ),
-    );
-    const canDonate = status === "active";
-    const canRefund =
-        status === "failed" && BigNumber.from(contribution ?? 0).gt(0);
-    const daysLeft = Math.max(
-        0,
-        Math.ceil(
-            (campaign.deadline.toNumber() * 1000 - Date.now()) /
-                (1000 * 60 * 60 * 24),
-        ),
-    );
 
-    const handleDonate = async () => {
-        if (!address) {
-            toast({
-                title: "Please connect your wallet to donate.",
-            });
-            return;
-        }
+    const status = getCampaignStatus(campaign);
+    const progress = getProgress(campaign);
+    const isOwner =
+        !!address && address.toLowerCase() === campaign.owner.toLowerCase();
+    const myContribution = BigNumber.from(contribution ?? 0);
+    const remaining = campaign.target.sub(campaign.amountCollected);
+    const backers = new Set(campaign.donators.map((d) => d.toLowerCase())).size;
+
+    // Wraps a contract write with wallet/network checks and toasts.
+    const run = async (
+        action: () => Promise<unknown>,
+        success: string,
+        failure: string,
+    ) => {
+        if (!address && !(await connectWallet())) return false;
         try {
-            await donateToCampaign({
-                args: [key],
-                overrides: {
-                    value: ethers.utils.parseEther(donationAmount.toFixed(2)),
-                },
-            });
-            toast({
-                title: "Donation successful!",
-            });
-            setDonationAmount(0);
+            await ensureNetwork();
+            await action();
+            toast({ title: success });
+            return true;
         } catch (error) {
-            console.error("Error donating to campaign:", error);
+            console.error(failure, error);
             toast({
-                title: "Error donating to campaign.",
-                description: "Please try again.",
+                title: failure,
+                description: "The transaction was rejected or failed.",
             });
+            return false;
         }
     };
 
-    const handleRefund = async () => {
-        try {
-            await claimRefund({ args: [key] });
-            toast({
-                title: "Refund sent to your wallet.",
-            });
-        } catch (error) {
-            console.error("Error claiming refund:", error);
-            toast({
-                title: "Error claiming refund.",
-                description: "Please try again.",
-            });
-        }
+    const handleDonate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const done = await run(
+            () =>
+                donateToCampaign({
+                    args: [key],
+                    overrides: { value: ethers.utils.parseEther(amount) },
+                }),
+            "Thanks for backing this campaign!",
+            "Couldn't send donation",
+        );
+        if (done) setAmount("");
+    };
+
+    const handleClose = async () => {
+        const done = await run(
+            () => closeCampaign({ args: [key] }),
+            status === "funded"
+                ? "Funds sent to your wallet"
+                : "Campaign ended. Backers can now claim refunds.",
+            "Couldn't close campaign",
+        );
+        if (done) setIsConfirmOpen(false);
+    };
+
+    const handleRefund = () =>
+        run(
+            () => claimRefund({ args: [key] }),
+            "Refund sent to your wallet",
+            "Couldn't claim refund",
+        );
+
+    const copyLink = async () => {
+        await navigator.clipboard.writeText(window.location.href);
+        toast({ title: "Link copied" });
     };
 
     return (
-        <BasicLayout>
-            <div className="container mx-auto p-4">
-                <header className="flex justify-between items-center mb-8">
-                    <h1 className="text-3xl font-bold">{campaign.title}</h1>
-                    <CustomConnectWallet />
-                </header>
-
-                <Card className="w-full max-w-3xl mx-auto">
-                    <CardHeader>
-                        <CardTitle className="flex items-center">
-                            {campaign.title}
-                            <Badge variant="secondary" className="ml-2">
-                                #{Number(key) + 1}
-                            </Badge>
-                            <Badge variant="outline" className="ml-2">
-                                {STATUS_LABELS[status]}
-                            </Badge>
-                        </CardTitle>
-                        <CardDescription>{campaign.description}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <img
-                            className="w-full h-[400px] object-cover rounded-md mb-4"
-                            src={campaign.image}
-                            alt={campaign.title}
-                        />
-                        <Progress value={progress} className="w-full mb-4" />
-                        <div className="flex justify-between text-sm mb-4">
-                            <Badge variant="outline" className="flex items-center">
-                                <Target className="mr-1 h-4 w-4" />
-                                {ethers.utils.formatEther(
-                                    campaign.amountCollected,
-                                )}{" "}
-                                ETH raised
-                            </Badge>
-                            <Badge variant="outline" className="flex items-center">
-                                <Target className="mr-1 h-4 w-4" />
-                                {ethers.utils.formatEther(campaign.target)} ETH
-                                goal
-                            </Badge>
-                        </div>
-                        <div className="flex items-center mb-4">
-                            <Avatar className="h-8 w-8 mr-2">
-                                <AvatarImage
-                                    src={`https://avatar.vercel.sh/${campaign.owner}`}
-                                />
-                                <AvatarFallback>
-                                    <User className="h-4 w-4" />
-                                </AvatarFallback>
-                            </Avatar>
-                            <span className="text-sm text-gray-500">
-                                by {campaign.owner.slice(0, 6)}...
-                                {campaign.owner.slice(-4)}
-                            </span>
-                        </div>
-                        {canDonate && (
-                            <>
-                                <div className="mb-4">
-                                    <Label
-                                        htmlFor="donationAmount"
-                                        className="mb-2 block"
-                                    >
-                                        Donation Amount (ETH)
-                                    </Label>
-                                    <div className="flex items-center">
-                                        <Slider
-                                            id="donationAmount"
-                                            max={remaining}
-                                            step={0.01}
-                                            value={[donationAmount]}
-                                            onValueChange={(value) =>
-                                                setDonationAmount(value[0])
-                                            }
-                                            className="flex-grow mr-4"
-                                        />
-                                        <Badge
-                                            variant="secondary"
-                                            className="text-lg"
-                                        >
-                                            {donationAmount.toFixed(2)} ETH
-                                        </Badge>
-                                    </div>
-                                </div>
-                                <Button
-                                    onClick={handleDonate}
-                                    disabled={
-                                        !address ||
-                                        donationAmount === 0 ||
-                                        isDonating
-                                    }
-                                    className="w-full"
-                                >
-                                    <DollarSign className="mr-2 h-4 w-4" />{" "}
-                                    Donate
-                                </Button>
-                            </>
-                        )}
-                    </CardContent>
-                    <CardFooter className="justify-between">
-                        <Badge variant="outline" className="flex items-center">
-                            <Calendar className="mr-2 h-4 w-4" />
-                            {daysLeft} days left
-                        </Badge>
-                        <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="text-xs">
-                                Deadline:{" "}
-                                {new Date(
-                                    campaign.deadline.toNumber() * 1000,
-                                ).toLocaleDateString()}
-                            </Badge>
-                            {canRefund && (
-                                <Button
-                                    variant="outline"
-                                    size="icon"
-                                    onClick={handleRefund}
-                                    disabled={isRefunding}
-                                    title="Claim refund"
-                                    aria-label="Claim refund"
-                                >
-                                    <Undo2 className="h-4 w-4" />
-                                </Button>
-                            )}
-                            <Sheet>
-                                <SheetTrigger asChild>
-                                    <Button
-                                        variant="outline"
-                                        size="icon"
-                                        title="View donors"
-                                        aria-label="View donors"
-                                    >
-                                        <Users className="h-4 w-4" />
-                                    </Button>
-                                </SheetTrigger>
-                                <SheetContent side="right">
-                                    <SheetHeader>
-                                        <SheetTitle>Donors List</SheetTitle>
-                                        <SheetDescription>
-                                            List of donors and their
-                                            contributions
-                                        </SheetDescription>
-                                    </SheetHeader>
-                                    <div className="py-4 overflow-y-auto max-h-[calc(100vh-200px)]">
-                                        {donators.length === 0 && (
-                                            <p className="text-sm text-gray-500">
-                                                No donations yet.
-                                            </p>
-                                        )}
-                                        {donators.map(
-                                            (donor: string, index: number) => (
-                                                <div
-                                                    key={index}
-                                                    className="flex justify-between items-center mb-2 p-2 bg-gray-100 rounded"
-                                                >
-                                                    <div className="flex items-center">
-                                                        <Avatar className="h-8 w-8 mr-2">
-                                                            <AvatarImage
-                                                                src={`https://avatar.vercel.sh/${donor}`}
-                                                            />
-                                                            <AvatarFallback>
-                                                                <User className="h-4 w-4" />
-                                                            </AvatarFallback>
-                                                        </Avatar>
-                                                        <span className="text-sm">
-                                                            {donor.slice(0, 6)}
-                                                            ...
-                                                            {donor.slice(-4)}
-                                                        </span>
-                                                    </div>
-                                                    <Badge>
-                                                        {ethers.utils.formatEther(
-                                                            donations[index],
-                                                        )}{" "}
-                                                        ETH
-                                                    </Badge>
-                                                </div>
-                                            ),
-                                        )}
-                                    </div>
-                                    <SheetFooter>
-                                        <SheetClose asChild>
-                                            <Button variant="outline">
-                                                Close
-                                            </Button>
-                                        </SheetClose>
-                                    </SheetFooter>
-                                </SheetContent>
-                            </Sheet>
-                        </div>
-                    </CardFooter>
-                </Card>
+        <div className="mx-auto max-w-6xl px-4 py-8">
+            <div className="mb-6 flex items-center justify-between">
+                <IconButton label="Back to campaigns" asChild>
+                    <Link href="/">
+                        <ArrowLeft />
+                    </Link>
+                </IconButton>
+                <IconButton label="Copy link to this campaign" onClick={copyLink}>
+                    <Link2 />
+                </IconButton>
             </div>
-        </BasicLayout>
+
+            <div className="grid gap-10 lg:grid-cols-[1fr_380px]">
+                <article className="min-w-0">
+                    <CampaignImage
+                        src={campaign.image}
+                        alt={campaign.title}
+                        className="aspect-video w-full rounded-2xl"
+                    />
+                    <h1 className="mt-8 text-balance text-3xl font-semibold tracking-tight md:text-4xl">
+                        {campaign.title}
+                    </h1>
+                    <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+                        <AddressAvatar address={campaign.owner} />
+                        <span>
+                            by{" "}
+                            <span className="font-medium text-foreground">
+                                {isOwner ? "you" : shortAddress(campaign.owner)}
+                            </span>
+                        </span>
+                        <IconButton label="View creator on Etherscan" asChild>
+                            <a
+                                href={`${EXPLORER_URL}/address/${campaign.owner}`}
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                <ExternalLink />
+                            </a>
+                        </IconButton>
+                    </div>
+                    <p className="mt-6 whitespace-pre-line leading-relaxed">
+                        {campaign.description}
+                    </p>
+
+                    <h2 className="mt-12 text-lg font-semibold">
+                        Backers{" "}
+                        <span className="text-muted-foreground">{backers}</span>
+                    </h2>
+                    {campaign.donators.length === 0 ? (
+                        <p className="mt-3 text-sm text-muted-foreground">
+                            No donations yet. Be the first.
+                        </p>
+                    ) : (
+                        <ul className="mt-3 divide-y rounded-2xl border bg-card">
+                            {campaign.donators
+                                .map((donor, i) => ({
+                                    donor,
+                                    value: campaign.donations[i],
+                                }))
+                                .reverse()
+                                .map(({ donor, value }, i) => (
+                                    <li
+                                        key={i}
+                                        className="flex items-center justify-between px-4 py-3 text-sm"
+                                    >
+                                        <span className="flex items-center gap-3">
+                                            <AddressAvatar address={donor} />
+                                            {donor.toLowerCase() ===
+                                            address?.toLowerCase()
+                                                ? "You"
+                                                : shortAddress(donor)}
+                                        </span>
+                                        <span className="font-medium">
+                                            {formatEth(value)} ETH
+                                        </span>
+                                    </li>
+                                ))}
+                        </ul>
+                    )}
+                </article>
+
+                <aside className="lg:sticky lg:top-24 lg:self-start">
+                    <div className="rounded-2xl border bg-card p-6 shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <StatusPill status={status} />
+                            {isOwner && status === "active" && (
+                                <IconButton
+                                    label="End campaign early"
+                                    onClick={() => setIsConfirmOpen(true)}
+                                >
+                                    <Lock />
+                                </IconButton>
+                            )}
+                        </div>
+                        <p className="mt-5 text-4xl font-semibold tracking-tight">
+                            {formatEth(campaign.amountCollected)}
+                            <span className="text-xl text-muted-foreground">
+                                {" "}
+                                ETH
+                            </span>
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            raised of {formatEth(campaign.target)} ETH goal
+                        </p>
+                        <Progress value={progress} className="mt-5 h-2" />
+                        <div className="mt-3 flex justify-between text-sm text-muted-foreground">
+                            <span>{progress}% funded</span>
+                            <span>{timeLeft(campaign.deadline)}</span>
+                        </div>
+
+                        <div className="mt-6 border-t pt-6">
+                            {status === "active" && (
+                                <form onSubmit={handleDonate} className="space-y-3">
+                                    <div className="relative">
+                                        <Input
+                                            type="number"
+                                            inputMode="decimal"
+                                            min="0.0001"
+                                            step="any"
+                                            max={ethers.utils.formatEther(remaining)}
+                                            placeholder="0.05"
+                                            required
+                                            value={amount}
+                                            onChange={(e) => setAmount(e.target.value)}
+                                            className="h-12 pr-14 text-lg"
+                                            aria-label="Donation amount in ETH"
+                                        />
+                                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                                            ETH
+                                        </span>
+                                    </div>
+                                    <WithTooltip label="Send ETH to this campaign">
+                                        <Button
+                                            type="submit"
+                                            size="lg"
+                                            className="h-12 w-full text-base"
+                                            disabled={isDonating}
+                                        >
+                                            {isDonating
+                                                ? "Sending…"
+                                                : address
+                                                  ? "Back this campaign"
+                                                  : "Connect wallet to donate"}
+                                        </Button>
+                                    </WithTooltip>
+                                    <p className="text-center text-xs text-muted-foreground">
+                                        {formatEth(remaining)} ETH to go. Refunded
+                                        if the goal isn&apos;t met.
+                                    </p>
+                                </form>
+                            )}
+                            {status === "funded" &&
+                                (isOwner ? (
+                                    <WithTooltip label="Close the campaign and send the funds to your wallet">
+                                        <Button
+                                            size="lg"
+                                            className="h-12 w-full text-base"
+                                            onClick={handleClose}
+                                            disabled={isClosing}
+                                        >
+                                            {isClosing
+                                                ? "Withdrawing…"
+                                                : `Withdraw ${formatEth(campaign.amountCollected)} ETH`}
+                                        </Button>
+                                    </WithTooltip>
+                                ) : (
+                                    <Note>
+                                        Goal reached! The creator can now
+                                        withdraw the funds.
+                                    </Note>
+                                ))}
+                            {status === "failed" &&
+                                (myContribution.gt(0) ? (
+                                    <WithTooltip label="Get your donation back">
+                                        <Button
+                                            size="lg"
+                                            className="h-12 w-full text-base"
+                                            onClick={handleRefund}
+                                            disabled={isRefunding}
+                                        >
+                                            {isRefunding
+                                                ? "Refunding…"
+                                                : `Claim refund of ${formatEth(myContribution)} ETH`}
+                                        </Button>
+                                    </WithTooltip>
+                                ) : (
+                                    <Note>
+                                        This campaign didn&apos;t reach its goal.
+                                        Backers can claim a refund here.
+                                    </Note>
+                                ))}
+                            {status === "closed" && (
+                                <Note>
+                                    Fully funded. The creator has withdrawn the
+                                    funds.
+                                </Note>
+                            )}
+                        </div>
+                    </div>
+                </aside>
+            </div>
+
+            <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>End this campaign early?</DialogTitle>
+                        <DialogDescription>
+                            It hasn&apos;t reached its goal, so no funds will be
+                            paid out and every backer will be able to claim a
+                            refund. This can&apos;t be undone.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <WithTooltip label="Close the campaign permanently">
+                            <Button
+                                variant="destructive"
+                                onClick={handleClose}
+                                disabled={isClosing}
+                            >
+                                {isClosing ? "Ending…" : "End campaign"}
+                            </Button>
+                        </WithTooltip>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </div>
+    );
+}
+
+function Note({ children }: { children: React.ReactNode }) {
+    return (
+        <p className="rounded-xl bg-muted px-4 py-3 text-center text-sm text-muted-foreground">
+            {children}
+        </p>
     );
 }

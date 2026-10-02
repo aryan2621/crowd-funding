@@ -1,425 +1,217 @@
 "use client";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
-    useAddress,
     useContract,
     useContractRead,
     useContractWrite,
 } from "@thirdweb-dev/react";
 import { ethers } from "ethers";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardFooter,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
+import { HandCoins, Rocket, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-
+import { cn } from "@/lib/utils";
+import { SiteFooter, SiteHeader } from "@/components/site-header";
 import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-    DialogTrigger,
-} from "@/components/ui/dialog";
-import { Lock, Target, User, Loader2 } from "lucide-react";
-import Link from "next/link";
-import {
-    Campaign,
-    CampaignForm,
-    STATUS_LABELS,
-    getCampaignStatus,
-    getProgress,
-} from "@/models/campaign";
-import { Calendar } from "@/components/ui/calendar";
-import CustomConnectWallet from "@/elements/button";
-import { Slider } from "@/components/ui/slider";
-import { Badge } from "@/components/ui/badge";
-import BasicLayout from "@/layouts/BasicLayout";
+    CampaignCard,
+    CampaignCardSkeleton,
+} from "@/components/campaign-card";
+import { CreateCampaignDialog } from "@/components/create-campaign-dialog";
+import { WithTooltip } from "@/elements/with-tooltip";
+import { useWallet } from "@/elements/wallet";
+import { Campaign, CampaignForm, getCampaignStatus } from "@/models/campaign";
 
-interface CampaignCardProps {
-    index: number;
-    campaign: Campaign;
-    onClose: () => void;
-    isClosing: boolean;
-}
+const FILTERS = [
+    { key: "all", label: "All", hint: "Show every campaign" },
+    { key: "active", label: "Active", hint: "Campaigns still accepting funds" },
+    { key: "ended", label: "Ended", hint: "Funded, failed or closed campaigns" },
+] as const;
+type Filter = (typeof FILTERS)[number]["key"];
 
-const CampaignCard = ({
-    campaign,
-    onClose,
-    index,
-    isClosing,
-}: CampaignCardProps) => {
-    const address = useAddress();
-    const progress = getProgress(campaign);
-    const status = getCampaignStatus(campaign);
-    return (
-        <Card className="w-[350px]">
-            <CardHeader className="relative">
-                <CardTitle className="flex items-center">
-                    <span>{campaign.title}</span>
-                    <Badge variant="secondary" className="ml-2">
-                        #{index + 1}
-                    </Badge>
-                    <Badge variant="outline" className="ml-2">
-                        {STATUS_LABELS[status]}
-                    </Badge>
-                </CardTitle>
-                <CardDescription>{campaign.description}</CardDescription>
-                {address === campaign.owner && !campaign.isClosed && (
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2"
-                        onClick={onClose}
-                        disabled={isClosing}
-                        title="Close campaign"
-                        aria-label="Close campaign"
-                    >
-                        <Lock className="h-4 w-4" />
-                    </Button>
-                )}
-            </CardHeader>
-            <CardContent>
-                <img
-                    className="w-full h-[200px] object-cover rounded-md"
-                    src={campaign.image}
-                    alt={campaign.title}
-                />
-                <Progress value={progress} className="w-full mt-4" />
-                <Badge variant="outline" className="flex items-center my-2">
-                    <Target className="mr-1 h-4 w-4" />
-                    {ethers.utils.formatEther(campaign.amountCollected)} ETH
-                    raised
-                </Badge>
-                <Badge variant="outline" className="flex items-center mb-1">
-                    <Target className="mr-1 h-4 w-4" />
-                    {ethers.utils.formatEther(campaign.target)} ETH goal
-                </Badge>
-            </CardContent>
-            <CardFooter className="flex justify-between">
-                <div className="flex items-center">
-                    <Avatar className="h-8 w-8 mr-2">
-                        <AvatarImage
-                            src={`https://avatar.vercel.sh/${campaign.owner}`}
-                        />
-                        <AvatarFallback>
-                            <User className="h-4 w-4" />
-                        </AvatarFallback>
-                    </Avatar>
-                    <span className="text-sm text-gray-500">
-                        by {campaign.owner.slice(0, 6)}...
-                        {campaign.owner.slice(-4)}
-                    </span>
-                </div>
-                <Link href={`/campaign?id=${index}`}>
-                    <Button variant="outline">View Details</Button>
-                </Link>
-            </CardFooter>
-        </Card>
-    );
-};
+const STEPS = [
+    {
+        icon: Rocket,
+        title: "Launch",
+        body: "Set a goal and a deadline. Your campaign lives on-chain in seconds.",
+    },
+    {
+        icon: HandCoins,
+        title: "Get backed",
+        body: "Anyone with a wallet can chip in ETH, and every donation is public.",
+    },
+    {
+        icon: ShieldCheck,
+        title: "Withdraw or refund",
+        body: "Hit the goal and the funds are yours. Miss it and backers get refunded.",
+    },
+];
 
-interface CreateCampaignDialogProps {
-    onCreateCampaign: (campaignData: CampaignForm) => Promise<void>;
-    isCreating: boolean;
-}
-
-const CreateCampaignDialog = ({
-    onCreateCampaign,
-    isCreating,
-}: CreateCampaignDialogProps) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [campaignData, setCampaignData] = useState<CampaignForm>({
-        title: "",
-        description: "",
-        target: 0,
-        deadline: new Date(),
-        image: "",
-    });
-    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
-        await onCreateCampaign(campaignData);
-        setIsOpen(false);
-    };
-
-    return (
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
-            <DialogTrigger asChild>
-                <Button disabled={isCreating}>Create Campaign</Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[900px]">
-                <DialogHeader>
-                    <DialogTitle>Create New Campaign</DialogTitle>
-                    <DialogDescription>
-                        Fill in the details to create a new fundraising
-                        campaign.
-                    </DialogDescription>
-                </DialogHeader>
-                <div className="flex gap-8">
-                    <form onSubmit={handleSubmit} className="flex-1">
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="title" className="text-right">
-                                    Title
-                                </Label>
-                                <Input
-                                    id="title"
-                                    name="title"
-                                    className="col-span-3"
-                                    required
-                                    value={campaignData.title}
-                                    onChange={(e) =>
-                                        setCampaignData({
-                                            ...campaignData,
-                                            title: e.target.value,
-                                        })
-                                    }
-                                />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label
-                                    htmlFor="description"
-                                    className="text-right"
-                                >
-                                    Description
-                                </Label>
-                                <Input
-                                    id="description"
-                                    name="description"
-                                    className="col-span-3"
-                                    required
-                                    value={campaignData.description}
-                                    onChange={(e) => {
-                                        setCampaignData({
-                                            ...campaignData,
-                                            description: e.target.value,
-                                        });
-                                    }}
-                                />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="target" className="text-right">
-                                    Target (ETH)
-                                </Label>
-                                <div className="col-span-3 flex items-center">
-                                    <Slider
-                                        id="target"
-                                        name="target"
-                                        min={0}
-                                        max={10}
-                                        step={0.1}
-                                        className="flex-grow mr-2"
-                                        value={[campaignData.target]}
-                                        onValueChange={(value) => {
-                                            setCampaignData({
-                                                ...campaignData,
-                                                target: value[0],
-                                            });
-                                        }}
-                                    />
-                                    <Badge variant="secondary">
-                                        {campaignData.target} ETH
-                                    </Badge>
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label
-                                    htmlFor="deadline"
-                                    className="text-right"
-                                >
-                                    Deadline
-                                </Label>
-                                <div className="col-span-3 border rounded-lg">
-                                    <Calendar
-                                        mode="single"
-                                        selected={campaignData.deadline}
-                                        disabled={{ before: new Date() }}
-                                        onSelect={(date) => {
-                                            setCampaignData({
-                                                ...campaignData,
-                                                deadline: date ?? new Date(),
-                                            });
-                                        }}
-                                    />
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="image" className="text-right">
-                                    Image URL
-                                </Label>
-                                <Input
-                                    id="image"
-                                    name="image"
-                                    type="url"
-                                    className="col-span-3"
-                                    required
-                                    value={campaignData.image}
-                                    onChange={(e) =>
-                                        setCampaignData({
-                                            ...campaignData,
-                                            image: e.target.value,
-                                        })
-                                    }
-                                />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={isCreating}>
-                                Create Campaign
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                    <div className="flex-1 flex flex-col items-center justify-center">
-                        {campaignData.image ? (
-                            <img
-                                src={campaignData.image}
-                                alt="Campaign preview"
-                                className="w-full h-full object-cover rounded-md"
-                            />
-                        ) : (
-                            <div className="w-full h-64 bg-gray-200 rounded-md flex items-center justify-center text-gray-500">
-                                No image provided
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </DialogContent>
-        </Dialog>
-    );
-};
-export default function Component() {
-    const address = useAddress();
+export default function Home() {
     const { toast } = useToast();
+    const { address, connectWallet, ensureNetwork } = useWallet();
     const { contract } = useContract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
-    const { data: campaigns, isLoading: isCampaignsLoading } = useContractRead(
-        contract,
-        "getCampaigns",
-    );
+    const { data, isLoading } = useContractRead(contract, "getCampaigns");
     const { mutateAsync: createCampaign, isLoading: isCreating } =
         useContractWrite(contract, "createCampaign");
-    const { mutateAsync: closeCampaign, isLoading: isClosing } =
-        useContractWrite(contract, "closeCampaign");
 
-    const handleCreateCampaign = async (campaignData: CampaignForm) => {
-        if (!contract || !address) return;
-        if (
-            !campaignData.title ||
-            !campaignData.description ||
-            !campaignData.target ||
-            !campaignData.deadline ||
-            !campaignData.image
-        ) {
-            toast({
-                title: "Error creating campaign",
-                description: "Please fill in all fields.",
-            });
-            return;
-        }
-        // End of the selected day, so picking today still gives a future deadline.
-        const deadline = new Date(campaignData.deadline);
-        deadline.setHours(23, 59, 59, 0);
-        const timestamp = Math.floor(deadline.getTime() / 1000);
-        const args = [
-            campaignData.title,
-            campaignData.description,
-            ethers.utils.parseEther(campaignData.target.toFixed(2)),
-            timestamp,
-            campaignData.image,
-        ];
+    const [isCreateOpen, setIsCreateOpen] = useState(false);
+    const [filter, setFilter] = useState<Filter>("all");
 
+    // Keep each campaign's on-chain id, newest first.
+    const campaigns = useMemo(() => {
+        const list = ((data as Campaign[] | undefined) ?? []).map(
+            (campaign, id) => ({ campaign, id }),
+        );
+        return list.reverse().filter(({ campaign }) => {
+            if (filter === "all") return true;
+            const isActive = getCampaignStatus(campaign) === "active";
+            return filter === "active" ? isActive : !isActive;
+        });
+    }, [data, filter]);
+
+    const openCreate = async () => {
+        if (!address && !(await connectWallet())) return;
+        setIsCreateOpen(true);
+    };
+
+    const handleCreate = async (form: CampaignForm) => {
+        const deadline = new Date(`${form.deadline}T23:59:59`);
         try {
+            await ensureNetwork();
             await createCampaign({
-                args,
+                args: [
+                    form.title.trim(),
+                    form.description.trim(),
+                    ethers.utils.parseEther(form.target),
+                    Math.floor(deadline.getTime() / 1000),
+                    form.image.trim(),
+                ],
             });
             toast({
-                title: "Campaign created successfully!",
-                description: "Your campaign has been created.",
+                title: "Campaign launched",
+                description: "It's live and ready for backers.",
             });
+            return true;
         } catch (error) {
             console.error("Error creating campaign:", error);
             toast({
-                title: "Error creating campaign",
-                description: "Please try again.",
+                title: "Couldn't create campaign",
+                description: "The transaction was rejected or failed.",
             });
+            return false;
         }
     };
 
-    const handleCloseCampaign = async (campaignId: number) => {
-        if (!contract || !address) return;
-
-        try {
-            await closeCampaign({ args: [campaignId] });
-            toast({
-                title: "Campaign closed successfully!",
-                description:
-                    "If the target was reached, the funds were sent to your wallet.",
-            });
-        } catch (error) {
-            console.error("Error closing campaign:", error);
-            toast({
-                title: "Error closing campaign",
-                description: "Please try again.",
-            });
-        }
-    };
     return (
-        <BasicLayout>
-            <div className="container mx-auto p-4">
-                <header className="flex justify-between items-center mb-8">
-                    <h1 className="text-3xl font-bold">Campaign Dashboard</h1>
-                    <div className="flex gap-4">
-                        <CustomConnectWallet />
-                        <CreateCampaignDialog
-                            onCreateCampaign={handleCreateCampaign}
-                            isCreating={isCreating}
-                        />
+        <div className="flex min-h-screen flex-col">
+            <SiteHeader onCreate={openCreate} />
+            <main className="flex-1">
+                <section className="mx-auto max-w-3xl px-4 pb-16 pt-20 text-center md:pt-28">
+                    <span className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                        Live on the Sepolia testnet
+                    </span>
+                    <h1 className="mt-6 text-balance text-4xl font-semibold tracking-tight md:text-6xl">
+                        Back ideas you believe in.{" "}
+                        <span className="text-primary">
+                            Straight from your wallet.
+                        </span>
+                    </h1>
+                    <p className="mx-auto mt-5 max-w-xl text-balance text-lg text-muted-foreground">
+                        Launch a campaign in a minute. Creators get paid only
+                        when the goal is met. Otherwise, everyone gets their
+                        ETH back.
+                    </p>
+                    <div className="mt-8">
+                        <WithTooltip label="Create a new fundraising campaign">
+                            <Button
+                                size="lg"
+                                className="h-12 rounded-full px-8 text-base"
+                                onClick={openCreate}
+                            >
+                                Start a campaign
+                            </Button>
+                        </WithTooltip>
                     </div>
-                </header>
-                {isCampaignsLoading ? (
-                    <div className="flex justify-center items-center h-64">
-                        <Loader2 className="h-8 w-8 animate-spin" />
+                </section>
+
+                <section id="campaigns" className="mx-auto max-w-6xl px-4 pb-20">
+                    <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+                        <h2 className="text-2xl font-semibold tracking-tight">
+                            Campaigns
+                        </h2>
+                        <div className="flex rounded-full border bg-card p-1">
+                            {FILTERS.map((f) => (
+                                <WithTooltip key={f.key} label={f.hint}>
+                                    <button
+                                        onClick={() => setFilter(f.key)}
+                                        className={cn(
+                                            "rounded-full px-4 py-1.5 text-sm font-medium transition",
+                                            filter === f.key
+                                                ? "bg-foreground text-background"
+                                                : "text-muted-foreground hover:text-foreground",
+                                        )}
+                                    >
+                                        {f.label}
+                                    </button>
+                                </WithTooltip>
+                            ))}
+                        </div>
                     </div>
-                ) : campaigns && campaigns.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {campaigns.map((campaign: Campaign, index: number) => (
-                            <CampaignCard
-                                key={index}
-                                index={index}
-                                campaign={campaign}
-                                onClose={() => handleCloseCampaign(index)}
-                                isClosing={isClosing}
-                            />
+                    {isLoading ? (
+                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                            {[0, 1, 2].map((i) => (
+                                <CampaignCardSkeleton key={i} />
+                            ))}
+                        </div>
+                    ) : campaigns.length > 0 ? (
+                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                            {campaigns.map(({ campaign, id }) => (
+                                <CampaignCard
+                                    key={id}
+                                    id={id}
+                                    campaign={campaign}
+                                />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="rounded-2xl border border-dashed px-6 py-16 text-center">
+                            <p className="font-medium">
+                                {filter === "all"
+                                    ? "No campaigns yet"
+                                    : `No ${filter} campaigns`}
+                            </p>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                                Be the first to launch one.
+                            </p>
+                        </div>
+                    )}
+                </section>
+
+                <section className="border-t bg-card/50">
+                    <div className="mx-auto grid max-w-6xl gap-10 px-4 py-20 md:grid-cols-3">
+                        {STEPS.map(({ icon: Icon, title, body }, i) => (
+                            <div key={title}>
+                                <span className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
+                                    <Icon className="h-5 w-5" />
+                                </span>
+                                <h3 className="mt-4 font-semibold">
+                                    {i + 1}. {title}
+                                </h3>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                    {body}
+                                </p>
+                            </div>
                         ))}
                     </div>
-                ) : (
-                    <div className="text-center text-gray-500">
-                        <p className="text-xl mb-4">
-                            No campaigns found. Create one to get started!
-                        </p>
-                        <Button
-                            onClick={() =>
-                                document
-                                    .querySelector<HTMLButtonElement>(
-                                        '[aria-haspopup="dialog"]',
-                                    )
-                                    ?.click()
-                            }
-                        >
-                            Create Your First Campaign
-                        </Button>
-                    </div>
-                )}
-            </div>
-        </BasicLayout>
+                </section>
+            </main>
+            <SiteFooter />
+            <CreateCampaignDialog
+                open={isCreateOpen}
+                onOpenChange={setIsCreateOpen}
+                onCreate={handleCreate}
+                isCreating={isCreating}
+            />
+        </div>
     );
 }
